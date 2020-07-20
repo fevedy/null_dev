@@ -232,35 +232,6 @@ static pj_status_t add_dev (struct null_factory *af, const char *dev_name)
 
     adi = &af->devs[af->dev_cnt];
 
-    TRACE_((THIS_FILE, "add_dev (%s): Enter", dev_name));
-
-    /* Try to open the device in playback mode */
-    pb_result = snd_pcm_open (&pcm, dev_name, SND_PCM_STREAM_PLAYBACK, 0);
-    if (pb_result >= 0) {
-	TRACE_((THIS_FILE, "Try to open the device for playback - success"));
-	snd_pcm_close (pcm);
-    } else {
-	TRACE_((THIS_FILE, "Try to open the device for playback - failure"));
-    }
-
-    /* Try to open the device in capture mode */
-    ca_result = snd_pcm_open (&pcm, dev_name, SND_PCM_STREAM_CAPTURE, 0);
-    if (ca_result >= 0) {
-	TRACE_((THIS_FILE, "Try to open the device for capture - success"));
-	snd_pcm_close (pcm);
-    } else {
-	TRACE_((THIS_FILE, "Try to open the device for capture - failure"));
-    }
-
-    /* Check if the device could be opened in playback or capture mode */
-    if (pb_result<0 && ca_result<0) {
-	TRACE_((THIS_FILE, "Unable to open sound device %s, setting "
-	        	   "in/out channel count to 0", dev_name));
-	/* Set I/O channel counts to 0 to indicate unavailable device */
-	adi->output_count = 0;
-	adi->input_count =  0;
-    }
-
     /* Reset device info */
     pj_bzero(adi, sizeof(*adi));
 
@@ -268,13 +239,13 @@ static pj_status_t add_dev (struct null_factory *af, const char *dev_name)
     strncpy(adi->name, dev_name, sizeof(adi->name));
 
     /* Check the number of playback channels */
-    adi->output_count = (pb_result>=0) ? 1 : 0;
+    adi->output_count = 1;
 
     /* Check the number of capture channels */
-    adi->input_count = (ca_result>=0) ? 1 : 0;
+    adi->input_count = 1;
 
     /* Set the default sample rate */
-    adi->default_samples_per_sec = 8000;
+    adi->default_samples_per_sec = 16000;
 
     /* Driver name */
     strcpy(adi->driver, "null");
@@ -391,37 +362,10 @@ static pj_status_t null_factory_refresh(pjmedia_aud_dev_factory *f)
     af->dev_cnt = 0;
 
     /* Enumerate sound devices */
-    err = snd_device_name_hint(-1, "pcm", (void***)&hints);
-    if (err != 0)
-	return PJMEDIA_EAUD_SYSERR;
-
-#if ENABLE_TRACING
-    snd_lib_error_set_handler(null_error_handler);
-#else
-    /* Set a null error handler prior to enumeration to suppress errors */
-    snd_lib_error_set_handler(null_null_error_handler);
-#endif
-
-    n = hints;
-    while (*n != NULL) {
-	char *name = snd_device_name_get_hint(*n, "NAME");
-	if (name != NULL) {
-	    if (0 != strcmp("null", name))
-		add_dev(af, name);
-	    free(name);
-	}
-	n++;
-    }
+    add_dev(af, "null device");
 
     /* Get the mixer name */
-    get_mixer_name(af);
-
-    /* Install error handler after enumeration, otherwise we'll get many
-     * error messages about invalid card/device ID.
-     */
-    snd_lib_error_set_handler(null_error_handler);
-
-    err = snd_device_name_free_hint((void**)hints);
+    //get_mixer_name(af);
 
     PJ_LOG(4,(THIS_FILE, "null driver found %d devices", af->dev_cnt));
 
@@ -510,8 +454,6 @@ static int pb_thread_func (void *arg)
     TRACE_((THIS_FILE, "pb_thread_func(%u): Started",
 	    (unsigned)syscall(SYS_gettid)));
 
-    snd_pcm_prepare (pcm);
-
     while (!stream->quit) {
 	pjmedia_frame frame;
 
@@ -521,25 +463,23 @@ static int pb_thread_func (void *arg)
 	frame.timestamp.u64 = tstamp.u64;
 	frame.bit_info = 0;
 
-	result = stream->pb_cb (user_data, &frame);
+	result = stream->pb_cb (user_data, &frame);//TODO:获取数据
 	if (result != PJ_SUCCESS || stream->quit)
 	    break;
 
 	if (frame.type != PJMEDIA_FRAME_TYPE_AUDIO)
-	    pj_bzero (buf, size);
+    {
+        pj_bzero (buf, size);
+    }   
 
-	result = snd_pcm_writei (pcm, buf, nframes);
-	if (result == -EPIPE) {
-	    PJ_LOG (4,(THIS_FILE, "pb_thread_func: underrun!"));
-	    snd_pcm_prepare (pcm);
-	} else if (result < 0) {
-	    PJ_LOG (4,(THIS_FILE, "pb_thread_func: error writing data!"));
-	}
+	//result = snd_pcm_writei (pcm, buf, nframes);
+    //播放数据
 
 	tstamp.u64 += nframes;
     }
 
-    snd_pcm_drain (pcm);
+    //snd_pcm_drain (pcm);
+    //TODO:这里是不是要做些关闭动作
     TRACE_((THIS_FILE, "pb_thread_func: Stopped"));
     return PJ_SUCCESS;
 }
@@ -581,20 +521,12 @@ static int ca_thread_func (void *arg)
     TRACE_((THIS_FILE, "ca_thread_func(%u): Started",
 	    (unsigned)syscall(SYS_gettid)));
 
-    snd_pcm_prepare (pcm);
-
     while (!stream->quit) {
 	pjmedia_frame frame;
 
 	pj_bzero (buf, size);
-	result = snd_pcm_readi (pcm, buf, nframes);
-	if (result == -EPIPE) {
-	    PJ_LOG (4,(THIS_FILE, "ca_thread_func: overrun!"));
-	    snd_pcm_prepare (pcm);
-	    continue;
-	} else if (result < 0) {
-	    PJ_LOG (4,(THIS_FILE, "ca_thread_func: error reading data!"));
-	}
+    //result = snd_pcm_readi (pcm, buf, nframes);
+    //TODO:读取一帧
 	if (stream->quit)
 	    break;
 
@@ -610,7 +542,8 @@ static int ca_thread_func (void *arg)
 
 	tstamp.u64 += nframes;
     }
-    snd_pcm_drain (pcm);
+    //snd_pcm_drain (pcm);
+    //TODO:是不是要做一些关闭动作
     TRACE_((THIS_FILE, "ca_thread_func: Stopped"));
 
     return PJ_SUCCESS;
@@ -633,59 +566,14 @@ static pj_status_t open_playback (struct null_stream* stream,
     /* Open PCM for playback */
     PJ_LOG (5,(THIS_FILE, "open_playback: Open playback device '%s'",
 	       stream->af->devs[param->play_id].name));
-    result = snd_pcm_open (&stream->pb_pcm,
-			   stream->af->devs[param->play_id].name,
-			   SND_PCM_STREAM_PLAYBACK,
-			   0);
-    if (result < 0)
-	return PJMEDIA_EAUD_SYSERR;
-
-    /* Allocate a hardware parameters object. */
-    snd_pcm_hw_params_alloca (&params);
-
-    /* Fill it in with default values. */
-    snd_pcm_hw_params_any (stream->pb_pcm, params);
-
-    /* Set interleaved mode */
-    snd_pcm_hw_params_set_access (stream->pb_pcm, params,
-				  SND_PCM_ACCESS_RW_INTERLEAVED);
 
     /* Set format */
-    switch (param->bits_per_sample) {
-    case 8:
-	TRACE_((THIS_FILE, "open_playback: set format SND_PCM_FORMAT_S8"));
-	format = SND_PCM_FORMAT_S8;
-	break;
-    case 16:
-	TRACE_((THIS_FILE, "open_playback: set format SND_PCM_FORMAT_S16_LE"));
-	format = SND_PCM_FORMAT_S16_LE;
-	break;
-    case 24:
-	TRACE_((THIS_FILE, "open_playback: set format SND_PCM_FORMAT_S24_LE"));
-	format = SND_PCM_FORMAT_S24_LE;
-	break;
-    case 32:
-	TRACE_((THIS_FILE, "open_playback: set format SND_PCM_FORMAT_S32_LE"));
-	format = SND_PCM_FORMAT_S32_LE;
-	break;
-    default:
-	TRACE_((THIS_FILE, "open_playback: set format SND_PCM_FORMAT_S16_LE"));
-	format = SND_PCM_FORMAT_S16_LE;
-	break;
-    }
-    snd_pcm_hw_params_set_format (stream->pb_pcm, params, format);
-
-    /* Set number of channels */
-    TRACE_((THIS_FILE, "open_playback: set channels: %d",
-		       param->channel_count));
-    snd_pcm_hw_params_set_channels (stream->pb_pcm, params,
-				    param->channel_count);
+    switch (param->bits_per_sample) 
+    {}
 
     /* Set clock rate */
     rate = param->clock_rate;
     TRACE_((THIS_FILE, "open_playback: set clock rate: %d", rate));
-    snd_pcm_hw_params_set_rate_near (stream->pb_pcm, params, &rate, NULL);
-    TRACE_((THIS_FILE, "open_playback: clock rate set to: %d", rate));
 
     /* Set period size to samples_per_frame frames. */
     stream->pb_frames = (snd_pcm_uframes_t) param->samples_per_frame /
@@ -693,18 +581,14 @@ static pj_status_t open_playback (struct null_stream* stream,
     TRACE_((THIS_FILE, "open_playback: set period size: %d",
 	    stream->pb_frames));
     tmp_period_size = stream->pb_frames;
-    snd_pcm_hw_params_set_period_size_near (stream->pb_pcm, params,
-					    &tmp_period_size, NULL);
-    TRACE_((THIS_FILE, "open_playback: period size set to: %d",
-	    tmp_period_size));
+
 
     /* Set the sound device buffer size and latency */
     if (param->flags & PJMEDIA_AUD_DEV_CAP_OUTPUT_LATENCY)
 	tmp_buf_size = (rate / 1000) * param->output_latency_ms;
     else
 	tmp_buf_size = (rate / 1000) * PJMEDIA_SND_DEFAULT_PLAY_LATENCY;
-    snd_pcm_hw_params_set_buffer_size_near (stream->pb_pcm, params,
-					    &tmp_buf_size);
+
     stream->param.output_latency_ms = tmp_buf_size / (rate / 1000);
 
     /* Set our buffer */
@@ -716,13 +600,6 @@ static pj_status_t open_playback (struct null_stream* stream,
 	    (int)tmp_buf_size));
     TRACE_((THIS_FILE, "open_playback: playback_latency set to: %d ms",
 	    (int)stream->param.output_latency_ms));
-
-    /* Activate the parameters */
-    result = snd_pcm_hw_params (stream->pb_pcm, params);
-    if (result < 0) {
-	snd_pcm_close (stream->pb_pcm);
-	return PJMEDIA_EAUD_SYSERR;
-    }
 
     PJ_LOG (5,(THIS_FILE, "Opened device null(%s) for playing, sample rate=%d"
 	       ", ch=%d, bits=%d, period size=%d frames, latency=%d ms",
@@ -866,7 +743,7 @@ static pj_status_t null_factory_create_stream(pjmedia_aud_dev_factory *f,
     pj_pool_t* pool;
     struct null_stream* stream;
 
-    pool = pj_pool_create (af->pf, "null%p", 1024, 1024, NULL);
+    pool = pj_pool_create(af->pf, "null_audio-dev", 1024, 1024, NULL);
     if (!pool)
 	return PJ_ENOMEM;
 
@@ -889,7 +766,8 @@ static pj_status_t null_factory_create_stream(pjmedia_aud_dev_factory *f,
 	    return status;
 	}
     }
-
+    
+#if 0
     /* Init capture */
     if (param->dir & PJMEDIA_DIR_CAPTURE) {
 	status = open_capture (stream, param);
@@ -900,6 +778,7 @@ static pj_status_t null_factory_create_stream(pjmedia_aud_dev_factory *f,
 	    return status;
 	}
     }
+#endif
 
     *p_strm = &stream->base;
     return PJ_SUCCESS;
@@ -1013,6 +892,7 @@ static pj_status_t null_stream_start (pjmedia_aud_stream *s)
 	    return status;
     }
 
+#if 0
     if (stream->param.dir & PJMEDIA_DIR_CAPTURE) {
 	status = pj_thread_create (stream->pool,
 				   "nullsound_playback",
@@ -1028,7 +908,7 @@ static pj_status_t null_stream_start (pjmedia_aud_stream *s)
 	    stream->pb_thread = NULL;
 	}
     }
-
+#endif
     return status;
 }
 
@@ -1076,11 +956,11 @@ static pj_status_t null_stream_destroy (pjmedia_aud_stream *s)
     null_stream_stop (s);
 
     if (stream->param.dir & PJMEDIA_DIR_PLAYBACK) {
-	snd_pcm_close (stream->pb_pcm);
+	//snd_pcm_close (stream->pb_pcm);
 	stream->pb_pcm = NULL;
     }
     if (stream->param.dir & PJMEDIA_DIR_CAPTURE) {
-	snd_pcm_close (stream->ca_pcm);
+	//snd_pcm_close (stream->ca_pcm);
 	stream->ca_pcm = NULL;
     }
 
